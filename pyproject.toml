@@ -1,0 +1,46 @@
+[project]
+name = "py-editor"
+version = "0.1.0"
+description = "A reusable canvas framework for building graphical node editors with PySide6"
+readme = "README.md"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: User Interfaces",
+    "Topic :: Multimedia :: Graphics :: Editors :: Vector-Based",
+]
+keywords = ["node-editor", "graph-editor", "canvas", "pyside6", "qt", "gui"]
+
+requires-python = ">=3.13"
+dependencies = [
+    "pyside6>=6.10.1",
+]
+
+[project.scripts]
+py-editor = "py_editor:main"
+
+[build-system]
+requires = ["uv_build>=0.9.9,<0.10.0"]
+build-backend = "uv_build"
+
+
+[[tool.uv.index]]
+name = "aliyun"
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true
+
+[dependency-groups]
+dev = [
+    "opencv-python>=4.12.0.88",
+    "pillow>=12.0.0",
+    "pytest>=9.0.1",
+]
