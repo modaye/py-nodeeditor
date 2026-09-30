@@ -1,16 +1,13 @@
 # Canvas Quickstart
 
-This guide introduces the reusable canvas framework shipped with the `rp` project. It is designed to be published as a standalone package, so feel free to reference or bundle this document when distributing the canvas module.
+This guide introduces the reusable PySide6 node canvas in this repository. The package name is `py-editor`. It requires Python 3.13 or newer.
 
 ## Installation
 
-```bash
-pip install py_editor  # replace with the final package name when published
-```
-
-If you work inside this repository, run the canvas directly:
+From this repository:
 
 ```powershell
+uv sync
 uv run python -m py_editor
 ```
 
@@ -52,10 +49,9 @@ node_b = controller.create_node(
     node_type="demo",
     inputs=["value"],
 )
-controller.create_edge(
-    source=node_a.id,
-    target=node_b.id,
-    edge_type="demo",
+controller.connect(
+    node_a.id,
+    node_b.id,
     source_port="value",
     target_port="value",
 )
@@ -65,13 +61,14 @@ view.show()
 app.exec()
 ```
 
-`canvas_registry` from `py_editor` is a shared, ready-to-use registry if you do not need isolation between canvases.
+`connect` checks the input port, port kinds, and cycles, then records one undo step. `create_edge` writes an edge without those rules. `canvas_registry` is a shared registry when canvases do not need isolation.
 
 ## Custom Rendering
 
 Register factories to override node or edge visuals:
 
 ```python
+from PySide6.QtCore import Qt
 from py_editor import CanvasRegistry, CanvasNodeItem, CanvasEdgeItem
 
 class DemoNode(CanvasNodeItem):
@@ -121,7 +118,7 @@ The `CanvasState.from_dict` constructor validates that edges only reference know
 
 ## Undo/Redo and Clipboard
 
-All mutations executed through `CanvasController` are undoable. `CanvasView` already binds the standard shortcuts: Delete, Ctrl+Z, Ctrl+Y, Ctrl+C, Ctrl+X, Ctrl+V, and Ctrl+0.
+All mutations executed through `CanvasController` are undoable. Drag empty canvas to pan. Shift-drag selects. The wheel zooms. Selecting a node draws its wires in blue and fades the others; Escape clears that emphasis. `CanvasView` binds Delete, Ctrl+Z, Ctrl+Y, Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+D, Ctrl+A, Ctrl+0, Ctrl+Plus, Ctrl+Minus, Ctrl+L, and Ctrl+Shift+L.
 
 ```python
 controller.connect(node_a.id, node_b.id)

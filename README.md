@@ -4,7 +4,7 @@ Py-Editor 是一个基于 PySide6 的可重用画布框架，用于构建图形�
 
 ## 核心特性
 
-- **可视化节点编辑**：提供直观的图形界面，支持创建、连接和操作节点
+- **可视化节点编辑**：平移、缩放、框选、吸附连线，并在选中节点时突出相关连线
 - **可扩展架构**：通过注册机制自定义节点和连线的外观与行为
 - **Undo/Redo 支持**：内置命令系统，支持完整的撤销/重做功能
 - **序列化能力**：支持将画布状态保存为字典格式，便于存储和恢复
@@ -13,15 +13,11 @@ Py-Editor 是一个基于 PySide6 的可重用画布框架，用于构建图形�
 
 ## 安装
 
-```bash
-pip install py-editor
-```
-
-或者如果你在这个仓库中开发，可以直接运行示例：
+包名是 `py-editor`，需要 Python 3.13 或更高版本。在这个仓库里：
 
 ```bash
-uv run examples/demo_canvas.py
-uv run examples/calculator_canvas.py
+uv sync
+uv run python -m py_editor
 ```
 
 ## 快速开始
@@ -119,13 +115,22 @@ with open("layout.json", "r", encoding="utf-8") as fh:
 controller = CanvasController(restored_state)
 ```
 
-## 试用
+## 操作
 
-```bash
-uv run python -m py_editor
-```
+在空白处按住左键拖动可以平移画布。按住 Shift 再拖动是框选。滚轮缩放。从端口拖出连线，松手时吸附到兼容端口；拖动已有连线的端点可以改接。拖线时会标出两端的节点、端口和列名，接不上时写明原因。
 
-画布支持滚轮缩放、空格平移、端口吸附连线、从连线端点改接，以及撤销、复制和删除。规则在 `CanvasPolicy` 上：输入口默认只保留一条线，并且不允许成环。调用 `controller.connect(...)` 会按这些规则连线。
+点中一个节点后，和它相连的线变成蓝色并画在上层，其余的线变淡。按 Esc 取消选择后，线条恢复。右键节点可以复制、删除或断开连线；右键空白处可以排列或适应画面。
+
+- `Ctrl+Z` / `Ctrl+Y`：撤销 / 重做
+- `Ctrl+C` / `Ctrl+X` / `Ctrl+V` / `Ctrl+D`：复制 / 剪切 / 粘贴 / 复制一份
+- `Delete`：删除选中的节点或连线
+- `Ctrl+A`：全选
+- `Ctrl+0`：适应画面
+- `Ctrl++` / `Ctrl+-`：放大 / 缩小
+- `Ctrl+L`：从左到右排列
+- `Ctrl+Shift+L`：从上到下排列
+
+`CanvasPolicy` 默认每个输入口只保留一条线。节点元数据 `multi_inputs` 里列出的端口可以接入多条线。不允许连成环。两端都声明了端口类型且类型不同时，连线会被拒绝。`controller.connect(...)` 使用这些规则并记入撤销栈。`create_edge` 只写入数据，不检查规则。
 
 ## 核心概念
 
