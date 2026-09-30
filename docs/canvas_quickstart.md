@@ -8,11 +8,10 @@ This guide introduces the reusable canvas framework shipped with the `rp` projec
 pip install py_editor  # replace with the final package name when published
 ```
 
-If you work inside this repository, activate the uv-managed virtual environment and run the demos directly:
+If you work inside this repository, run the canvas directly:
 
 ```powershell
-uv run examples/demo_canvas.py
-uv run examples/calculator_canvas.py
+uv run python -m py_editor
 ```
 
 ## Core Concepts
@@ -20,7 +19,8 @@ uv run examples/calculator_canvas.py
 - `NodeData`: Serializable description of a node (id, title, `node_type`, ports, metadata).
 - `EdgeData`: Serializable description of a connection (`edge_type`, endpoints, ports, metadata).
 - `CanvasState`: In-memory graph containing nodes, edges, and the current selection. Provides dictionary-style access plus helpers for cloning and serialization.
-- `CanvasController`: High-level façade that issues undoable commands (`add_node`, `create_edge`, `update_node`, clipboard operations, etc.).
+- `CanvasController`: High-level façade. `connect` applies `CanvasPolicy` (snap radius, single input, cycle check) and records one undo step. `create_edge` writes an edge without those rules.
+- `CanvasPolicy`: Connection rules shared by the controller and the view.
 - `CanvasRegistry`: Maps `node_type` / `edge_type` identifiers to factory functions that produce custom Qt graphics items.
 - `CanvasView`: Interactive Qt view that renders the state, listens to controller events, and exposes signals for UI integrations.
 
@@ -121,14 +121,15 @@ The `CanvasState.from_dict` constructor validates that edges only reference know
 
 ## Undo/Redo and Clipboard
 
-All mutations executed through `CanvasController` are undoable. The controller exposes `undo`, `redo`, `copy_selection`, `cut_selection`, and `paste` helpers, so your UI can wire them to menu actions or shortcuts.
+All mutations executed through `CanvasController` are undoable. `CanvasView` already binds the standard shortcuts: Delete, Ctrl+Z, Ctrl+Y, Ctrl+C, Ctrl+X, Ctrl+V, and Ctrl+0.
 
 ```python
-view.undo_requested.connect(controller.undo)
-view.redo_requested.connect(controller.redo)
+controller.connect(node_a.id, node_b.id)
+view.undo()
+view.redo()
 ```
 
-(Emit these signals from your own widgets; the view keeps the scene focused on selection updates and node dragging.)
+`node_double_clicked` is the hook for a side inspector. Keep tool settings in `NodeData.metadata` instead of embedding widgets in the node.
 
 ## Extending the Canvas
 
@@ -142,17 +143,16 @@ Because every visual item retains a clone of its `NodeData`/`EdgeData`, integrat
 
 ## Testing
 
-Example test coverage is provided in `tests/test_canvas_models_serialization.py` and `tests/test_canvas_registry.py`. When packaging the canvas separately, keep these tests (or equivalents) to ensure serialization and factory resolution work as expected.
+Example test coverage is provided in `tests/test_canvas_models_serialization.py`, `tests/test_canvas_registry.py`, and `tests/test_policy.py`.
 
 Run the suite with:
 
 ```powershell
-uv run pytest tests/test_canvas_models_serialization.py tests/test_canvas_registry.py
+uv run pytest
 ```
 
 ## Further Reading
 
-- `examples/demo_canvas.py` – Minimal demo wiring custom rendering into the shared registry.
-- `examples/calculator_canvas.py` – End-to-end example featuring node/edge scheduling logic, metadata editing, and custom factories.
+- `python -m py_editor` opens a small canvas for trying pan, zoom, and connecting.
 
 With these building blocks you can embed the canvas into your own PySide6 applications and ship it as an independent, scriptable graph editor.

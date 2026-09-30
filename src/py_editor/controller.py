@@ -6,6 +6,8 @@ from .commands import (
     AddEdgeCommand,
     AddNodeCommand,
     CommandManager,
+    ConnectCommand,
+    DeleteSelectionCommand,
     MoveNodesCommand,
     RemoveEdgeCommand,
     RemoveNodeCommand,
@@ -20,17 +22,28 @@ from .models import (
     SelectionPayload,
     ensure_unique_id,
 )
+from .policy import CanvasPolicy, ConnectRequest, ConnectResult
 
 __all__ = ["CanvasController"]
 
 
 class CanvasController:
-    """High-level helper that applies canvas commands to a state."""
+    """Apply undoable graph edits.
 
-    def __init__(self, state: CanvasState | None = None) -> None:
+    ``create_node`` and ``create_edge`` write the model directly. ``connect``
+    is the editing operation: it enforces :class:`CanvasPolicy`, replaces a
+    busy input, and records one undo step.
+    """
+
+    def __init__(
+        self,
+        state: CanvasState | None = None,
+        policy: CanvasPolicy | None = None,
+    ) -> None:
         self._state = state or CanvasState()
         self._commands = CommandManager(self._state)
         self._clipboard: SelectionPayload | None = None
+        self._policy = policy or CanvasPolicy()
 
     @property
     def state(self) -> CanvasState:
@@ -39,6 +52,12 @@ class CanvasController:
     @property
     def commands(self) -> CommandManager:
         return self._commands
+
+    @property
+    def policy(self) -> CanvasPolicy:
+        """Connection rules shared with the canvas view."""
+
+        return self._policy
 
     def undo(self) -> None:
         self._commands.undo()
@@ -149,6 +168,79 @@ class CanvasController:
         )
         return self.add_edge(edge)
 
+    def connect(
+        self,
+        source: str,
+        target: str,
+        *,
+        source_port: str | None = None,
+        target_port: str | None = None,
+        edge_type: str = "default",
+        edge_id: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        replace_edges: Iterable[str] = (),
+    ) -> ConnectResult:
+        """Validate and add a connection.
+
+        A single output port is chosen when ``source_port`` is omitted, and a
+        single input port when ``target_port`` is omitted. ``replace_edges``
+        marks wires already detached by a reconnect gesture.
+        """
+
+        request = ConnectRequest(
+            source=source,
+            target=target,
+            source_port=source_port,
+            target_port=target_port,
+        )
+        decision = self._policy.evaluate(
+            self._state,
+            request,
+            ignore=replace_edges,
+        )
+        if not decision.accepted:
+            return decision
+        assert decision.source_port is not None
+        assert decision.target_port is not None
+        base_id = edge_id or f"{decision.source}->{decision.target}"
+        unique_id = ensure_unique_id(self._state.edge_ids(), base_id)
+        normalized_type = "default"
+        if isinstance(edge_type, str) and edge_type.strip():
+            normalized_type = edge_type.strip()
+        edge = EdgeData(
+            id=unique_id,
+            source=decision.source or source,
+            target=decision.target or target,
+            edge_type=normalized_type,
+            source_port=decision.source_port,
+            target_port=decision.target_port,
+            metadata=dict(metadata or {}),
+        )
+        self._commands.push(ConnectCommand(edge, decision.replaced_edge_ids))
+        return ConnectResult(
+            accepted=True,
+            reason="ok",
+            source=edge.source,
+            target=edge.target,
+            source_port=edge.source_port,
+            target_port=edge.target_port,
+            edge_id=edge.id,
+            replaced_edge_ids=decision.replaced_edge_ids,
+        )
+
+    def delete(
+        self,
+        node_ids: Iterable[str] = (),
+        edge_ids: Iterable[str] = (),
+    ) -> None:
+        """Remove nodes and edges in one undo step."""
+
+        nodes = [node_id for node_id in node_ids if self._state.has_node(node_id)]
+        edges = [edge_id for edge_id in edge_ids if self._state.has_edge(edge_id)]
+        if not nodes and not edges:
+            return
+        self._commands.push(DeleteSelectionCommand(nodes, edges))
+
     def remove_edge(self, edge_id: str) -> None:
         if not self._state.has_edge(edge_id):
             return
@@ -195,19 +287,10 @@ class CanvasController:
         return self._clipboard
 
     def cut_selection(self) -> SelectionPayload | None:
-        edges_to_remove = list(self._state.selection.edges)
+        node_ids = list(self._state.selection.nodes)
+        edge_ids = list(self._state.selection.edges)
         payload = self.copy_selection()
-        node_ids = [node.id for node in payload.nodes] if payload else []
-        if node_ids:
-            self.remove_nodes(node_ids)
-        if edges_to_remove:
-            remaining = [
-                edge_id
-                for edge_id in edges_to_remove
-                if self._state.has_edge(edge_id)
-            ]
-            if remaining:
-                self.remove_edges(remaining)
+        self.delete(node_ids, edge_ids)
         return payload
 
     def paste(

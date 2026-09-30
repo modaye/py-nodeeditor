@@ -14,6 +14,8 @@ __all__ = [
     "AddEdgeCommand",
     "RemoveEdgeCommand",
     "UpdateNodeCommand",
+    "ConnectCommand",
+    "DeleteSelectionCommand",
     "PasteNodesCommand",
 ]
 
@@ -207,6 +209,65 @@ class UpdateNodeCommand(CanvasCommand):
         if self._after is not None:
             state.selection.nodes.discard(self._after.id)
         state.selection.nodes.add(self._before.id)
+
+
+class ConnectCommand(CanvasCommand):
+    """Add one edge and drop the edges it replaces, as a single undo step."""
+
+    def __init__(self, edge: EdgeData, replace_ids: Iterable[str]) -> None:
+        super().__init__(f"Connect {edge.source} -> {edge.target}")
+        self._edge = edge.clone()
+        self._replace_ids = list(dict.fromkeys(replace_ids))
+        self._removed: list[EdgeData] = []
+
+    def redo(self, state: CanvasState) -> None:
+        self._removed = []
+        for edge_id in self._replace_ids:
+            removed = state.remove_edge(edge_id)
+            if removed is not None:
+                self._removed.append(removed)
+        state.add_edge(self._edge)
+
+    def undo(self, state: CanvasState) -> None:
+        state.remove_edge(self._edge.id)
+        for edge in self._removed:
+            state.restore_edge(edge)
+
+
+class DeleteSelectionCommand(CanvasCommand):
+    """Remove nodes and edges, including wires attached to those nodes."""
+
+    def __init__(
+        self,
+        node_ids: Iterable[str],
+        edge_ids: Iterable[str],
+    ) -> None:
+        super().__init__("Delete selection")
+        self._node_ids = list(dict.fromkeys(node_ids))
+        self._edge_ids = list(dict.fromkeys(edge_ids))
+        self._nodes: list[NodeData] = []
+        self._edges: list[EdgeData] = []
+
+    def redo(self, state: CanvasState) -> None:
+        self._nodes = []
+        self._edges = []
+        for edge_id in self._edge_ids:
+            removed = state.remove_edge(edge_id)
+            if removed is not None:
+                self._edges.append(removed)
+        for node_id in self._node_ids:
+            removed = state.remove_node(node_id)
+            if removed is None:
+                continue
+            node, edges = removed
+            self._nodes.append(node)
+            self._edges.extend(edges)
+
+    def undo(self, state: CanvasState) -> None:
+        for node in self._nodes:
+            state.restore_node(node)
+        for edge in self._edges:
+            state.restore_edge(edge)
 
 
 class PasteNodesCommand(CanvasCommand):

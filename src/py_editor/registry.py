@@ -176,29 +176,32 @@ class CanvasRegistry:
 
     def _resolve_node_kind(self, node: NodeData) -> str:
         node_type = getattr(node, "node_type", "default")
-        return node_type
+        if node_type and node_type != "default":
+            return node_type
+        return self._kind_from_metadata(node.metadata)
 
     def _resolve_edge_kind(self, edge: EdgeData) -> str:
         edge_type = getattr(edge, "edge_type", "default")
         if edge_type and edge_type != "default":
             return edge_type
-        metadata = edge.metadata or {}
-        if isinstance(metadata, dict):
-            canvas_meta = metadata.get("canvas")
-            if isinstance(canvas_meta, dict):
-                value = self._first_non_empty(
-                    canvas_meta,
-                    ("kind", "type", "style", "edge"),
-                )
-                if value:
-                    return value
+        return self._kind_from_metadata(edge.metadata)
+
+    def _kind_from_metadata(self, metadata: object) -> str:
+        if not isinstance(metadata, dict):
+            return "default"
+        canvas_meta = metadata.get("canvas")
+        if isinstance(canvas_meta, dict):
             value = self._first_non_empty(
-                metadata,
-                ("canvas_kind", "ui_kind", "kind"),
+                canvas_meta,
+                ("kind", "type", "style", "edge"),
             )
             if value:
                 return value
-        return "default"
+        value = self._first_non_empty(
+            metadata,
+            ("canvas_kind", "ui_kind", "kind"),
+        )
+        return value or "default"
 
     def _normalize_kind(self, kind: str) -> str:
         text = str(kind).strip()

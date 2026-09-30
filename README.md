@@ -52,11 +52,10 @@ node_b = controller.create_node(
     inputs=["value"],
 )
 
-# 连接节点
-controller.create_edge(
-    source=node_a.id,
-    target=node_b.id,
-    edge_type="demo",
+# 连接节点。connect 会检查输入口占用和成环，并记入撤销栈。
+controller.connect(
+    node_a.id,
+    node_b.id,
     source_port="value",
     target_port="value",
 )
@@ -120,28 +119,21 @@ with open("layout.json", "r", encoding="utf-8") as fh:
 controller = CanvasController(restored_state)
 ```
 
-## 示例程序
+## 试用
 
-项目包含了两个示例程序来演示不同的使用场景：
-
-1. **基础画布演示** ([examples/demo_canvas.py](examples/demo_canvas.py)):
-   展示了如何使用自定义渲染创建一个简单的节点编辑器
-
-2. **计算器演示** ([examples/calculator_canvas.py](examples/calculator_canvas.py):
-   一个完整的计算器应用，展示了更复杂的节点交互和计算引擎集成
-
-运行示例：
 ```bash
-uv run examples/demo_canvas.py
-uv run examples/calculator_canvas.py
+uv run python -m py_editor
 ```
+
+画布支持滚轮缩放、空格平移、端口吸附连线、从连线端点改接，以及撤销、复制和删除。规则在 `CanvasPolicy` 上：输入口默认只保留一条线，并且不允许成环。调用 `controller.connect(...)` 会按这些规则连线。
 
 ## 核心概念
 
 - `NodeData`: 节点的序列化描述（ID、标题、类型、端口、元数据）
 - `EdgeData`: 连线的序列化描述（类型、端点、端口、元数据）
 - `CanvasState`: 内存中的图形结构，包含节点、连线和当前选择
-- `CanvasController`: 高级接口，负责执行可撤销的操作
+- `CanvasController`: 撤销栈上的图编辑接口。`connect` 走连线规则，`create_edge` 只写入数据
+- `CanvasPolicy`: 吸附半径、输入口是否单连接、是否允许成环
 - `CanvasRegistry`: 将节点/连线类型映射到工厂函数的注册表
 - `CanvasView`: 基于 Qt 的交互式视图组件
 
@@ -149,7 +141,7 @@ uv run examples/calculator_canvas.py
 
 画布可以通过以下方式扩展：
 
-- 实现新的命令类（继承 `CanvasCommand`）以支持自定义撤销/重做行为
+- 实现新的命令类（继承 `py_editor.commands.CanvasCommand`）以支持自定义撤销/重做行为
 - 通过 `CanvasRegistry.set_connection_preview_factory` 注册连接预览工厂函数
 - 构建监听视图/控制器信号的插件，例如添加跟踪节点集合的分组覆盖层
 
