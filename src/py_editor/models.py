@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Tuple
 
+SCHEMA_VERSION = 1
+
 __all__ = [
+    "SCHEMA_VERSION",
+    "Port",
+    "Viewport",
     "NodeData",
     "EdgeData",
     "CanvasSelection",
@@ -13,15 +18,91 @@ __all__ = [
 ]
 
 
+@dataclass(frozen=True, slots=True)
+class Port:
+    """One side of a node. ``multi`` only changes how many wires an input keeps."""
+
+    id: str
+    side: str
+    kind: str | None = None
+    multi: bool = False
+
+    def __post_init__(self) -> None:
+        if self.side not in ("input", "output"):
+            raise ValueError("Port side must be 'input' or 'output'")
+        if not self.id:
+            raise ValueError("Port id is required")
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "id": self.id,
+            "side": self.side,
+            "multi": self.multi,
+        }
+        if self.kind is not None:
+            payload["kind"] = self.kind
+        return payload
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "Port":
+        if not isinstance(payload, Mapping):
+            raise ValueError("Port must be a mapping")
+        if "id" not in payload or "side" not in payload:
+            raise ValueError("Port requires 'id' and 'side'")
+        kind = payload.get("kind")
+        if kind is not None and not isinstance(kind, str):
+            raise ValueError("Port 'kind' must be a string")
+        multi = payload.get("multi", False)
+        if not isinstance(multi, bool):
+            raise ValueError("Port 'multi' must be a boolean")
+        return cls(id=str(payload["id"]), side=str(payload["side"]), kind=kind, multi=multi)
+
+
+@dataclass(frozen=True, slots=True)
+class Viewport:
+    """Scene point at the center of the view, and the current zoom."""
+
+    x: float
+    y: float
+    zoom: float
+
+    def to_dict(self) -> Dict[str, float]:
+        return {"x": float(self.x), "y": float(self.y), "zoom": float(self.zoom)}
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "Viewport":
+        if not isinstance(payload, Mapping):
+            raise ValueError("Viewport must be a mapping")
+        try:
+            zoom = float(payload["zoom"])
+            return cls(x=float(payload["x"]), y=float(payload["y"]), zoom=zoom)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Viewport requires numeric x, y, and zoom") from exc
+
+
 @dataclass(slots=True)
 class NodeData:
     id: str
     title: str
     node_type: str = "default"
     position: Tuple[float, float] = (0.0, 0.0)
-    inputs: List[str] = field(default_factory=list)
-    outputs: List[str] = field(default_factory=list)
+    ports: List[Port] = field(default_factory=list)
+    draggable: bool = True
+    selectable: bool = True
+    connectable: bool = True
+    deletable: bool = True
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        seen: set[tuple[str, str]] = set()
+        for port in self.ports:
+            key = (port.side, port.id)
+            if key in seen:
+                raise ValueError(f"Duplicate {port.side} port id: {port.id}")
+            seen.add(key)
+
+    def port_ids(self, side: str) -> list[str]:
+        return [port.id for port in self.ports if port.side == side]
 
     def clone(self, *, with_id: str | None = None) -> "NodeData":
         node_id = with_id if with_id is not None else self.id
@@ -30,8 +111,11 @@ class NodeData:
             title=self.title,
             node_type=self.node_type,
             position=(self.position[0], self.position[1]),
-            inputs=list(self.inputs),
-            outputs=list(self.outputs),
+            ports=list(self.ports),
+            draggable=self.draggable,
+            selectable=self.selectable,
+            connectable=self.connectable,
+            deletable=self.deletable,
             metadata=dict(self.metadata),
         )
 
@@ -52,45 +136,39 @@ class NodeData:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "schema_version": SCHEMA_VERSION,
             "id": self.id,
             "title": self.title,
             "node_type": self.node_type,
             "position": [float(self.position[0]), float(self.position[1])],
-            "inputs": list(self.inputs),
-            "outputs": list(self.outputs),
+            "ports": [port.to_dict() for port in self.ports],
+            "draggable": self.draggable,
+            "selectable": self.selectable,
+            "connectable": self.connectable,
+            "deletable": self.deletable,
             "metadata": dict(self.metadata),
         }
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "NodeData":
+        if payload.get("schema_version") != SCHEMA_VERSION:
+            raise ValueError("Node schema_version must be 1")
         if "id" not in payload:
             raise ValueError("Node data is missing required field 'id'")
-        identifier = str(payload["id"])  # ensure str
+        identifier = str(payload["id"])
         title = str(payload.get("title", ""))
         node_type = str(payload.get("node_type", "default"))
         position_raw = payload.get("position", (0.0, 0.0))
         if not isinstance(position_raw, (list, tuple)) or len(position_raw) != 2:
-            raise ValueError(
-                "Node 'position' must be a sequence of two values"
-            )
+            raise ValueError("Node 'position' must be a sequence of two values")
         try:
             position = (float(position_raw[0]), float(position_raw[1]))
         except (TypeError, ValueError) as exc:
             raise ValueError("Node 'position' values must be numeric") from exc
-        inputs_raw = payload.get("inputs", [])
-        outputs_raw = payload.get("outputs", [])
-        if not isinstance(inputs_raw, Iterable) or isinstance(
-            inputs_raw,
-            (str, bytes),
-        ):
-            raise ValueError("Node 'inputs' must be an iterable of strings")
-        if not isinstance(outputs_raw, Iterable) or isinstance(
-            outputs_raw,
-            (str, bytes),
-        ):
-            raise ValueError("Node 'outputs' must be an iterable of strings")
-        inputs = [str(port) for port in inputs_raw]
-        outputs = [str(port) for port in outputs_raw]
+        ports_raw = payload.get("ports")
+        if not isinstance(ports_raw, list):
+            raise ValueError("Node 'ports' must be a list of port objects")
+        ports = [Port.from_dict(item) for item in ports_raw]
         metadata_raw = payload.get("metadata", {})
         metadata: Dict[str, Any]
         if metadata_raw is None:
@@ -104,8 +182,11 @@ class NodeData:
             title=title,
             node_type=node_type,
             position=position,
-            inputs=inputs,
-            outputs=outputs,
+            ports=ports,
+            draggable=_required_flag(payload, "draggable"),
+            selectable=_required_flag(payload, "selectable"),
+            connectable=_required_flag(payload, "connectable"),
+            deletable=_required_flag(payload, "deletable"),
             metadata=metadata,
         )
 
@@ -214,11 +295,19 @@ class CanvasSelection:
         self.edges = {edge_id for edge_id in edge_ids}
 
 
+def _required_flag(payload: Mapping[str, Any], name: str) -> bool:
+    value = payload.get(name)
+    if not isinstance(value, bool):
+        raise ValueError(f"Node '{name}' must be a boolean")
+    return value
+
+
 @dataclass
 class CanvasState:
     nodes: MutableMapping[str, NodeData] = field(default_factory=dict)
     edges: MutableMapping[str, EdgeData] = field(default_factory=dict)
     selection: CanvasSelection = field(default_factory=CanvasSelection)
+    viewport: Viewport = field(default_factory=lambda: Viewport(0.0, 0.0, 1.0))
 
     def has_node(self, node_id: str) -> bool:
         return node_id in self.nodes
@@ -252,10 +341,11 @@ class CanvasState:
             if isinstance(raw_type, str) and raw_type.strip():
                 normalized_type = raw_type.strip()
             payload = replace(payload, node_type=normalized_type)
-        if "inputs" in updates:
-            payload = replace(payload, inputs=list(updates["inputs"]))
-        if "outputs" in updates:
-            payload = replace(payload, outputs=list(updates["outputs"]))
+        if "ports" in updates:
+            payload = replace(payload, ports=list(updates["ports"]))
+        for flag in ("draggable", "selectable", "connectable", "deletable"):
+            if flag in updates:
+                payload = replace(payload, **{flag: bool(updates[flag])})
         if "metadata" in updates:
             payload = replace(payload, metadata=dict(updates["metadata"]))
         self.nodes[node_id] = payload
@@ -354,6 +444,8 @@ class CanvasState:
 
     def to_dict(self, *, include_selection: bool = True) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
+            "schema_version": SCHEMA_VERSION,
+            "viewport": self.viewport.to_dict(),
             "nodes": [node.to_dict() for node in self.nodes.values()],
             "edges": [edge.to_dict() for edge in self.edges.values()],
         }
@@ -366,7 +458,11 @@ class CanvasState:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "CanvasState":
-        state = cls()
+        if payload.get("schema_version") != SCHEMA_VERSION:
+            raise ValueError("Canvas schema_version must be 1")
+        if "viewport" not in payload:
+            raise ValueError("CanvasState requires viewport")
+        state = cls(viewport=Viewport.from_dict(payload["viewport"]))
         nodes_raw = payload.get("nodes", [])
         if nodes_raw is None:
             nodes_raw = []

@@ -15,6 +15,7 @@ __all__ = [
     "RemoveEdgeCommand",
     "UpdateNodeCommand",
     "ConnectCommand",
+    "CompositeCommand",
     "DeleteSelectionCommand",
     "PasteNodesCommand",
 ]
@@ -33,13 +34,34 @@ class CanvasCommand:
         raise NotImplementedError
 
 
+class CompositeCommand(CanvasCommand):
+    """Several edits that undo and redo as one step."""
+
+    def __init__(self, label: str, commands: Iterable[CanvasCommand]) -> None:
+        super().__init__(label)
+        self._commands = list(commands)
+
+    def redo(self, state: CanvasState) -> None:
+        for command in self._commands:
+            command.redo(state)
+
+    def undo(self, state: CanvasState) -> None:
+        for command in reversed(self._commands):
+            command.undo(state)
+
+
 class CommandManager:
     """Simple undo/redo stack for canvas commands."""
 
-    def __init__(self, state: CanvasState) -> None:
+    def __init__(self, state: CanvasState, on_applied=None) -> None:
         self._state = state
         self._undo_stack: list[CanvasCommand] = []
         self._redo_stack: list[CanvasCommand] = []
+        self._on_applied = on_applied
+
+    def _applied(self) -> None:
+        if self._on_applied is not None:
+            self._on_applied()
 
     @property
     def state(self) -> CanvasState:
@@ -57,6 +79,7 @@ class CommandManager:
         command.redo(self._state)
         self._undo_stack.append(command)
         self._redo_stack.clear()
+        self._applied()
 
     def undo(self) -> None:
         if not self._undo_stack:
@@ -64,6 +87,7 @@ class CommandManager:
         command = self._undo_stack.pop()
         command.undo(self._state)
         self._redo_stack.append(command)
+        self._applied()
 
     def redo(self) -> None:
         if not self._redo_stack:
@@ -71,6 +95,7 @@ class CommandManager:
         command = self._redo_stack.pop()
         command.redo(self._state)
         self._undo_stack.append(command)
+        self._applied()
 
     def clear(self) -> None:
         self._undo_stack.clear()

@@ -176,49 +176,15 @@ class CanvasRegistry:
 
     def _resolve_node_kind(self, node: NodeData) -> str:
         node_type = getattr(node, "node_type", "default")
-        if node_type and node_type != "default":
-            return node_type
-        return self._kind_from_metadata(node.metadata)
+        return node_type if node_type else "default"
 
     def _resolve_edge_kind(self, edge: EdgeData) -> str:
         edge_type = getattr(edge, "edge_type", "default")
-        if edge_type and edge_type != "default":
-            return edge_type
-        return self._kind_from_metadata(edge.metadata)
-
-    def _kind_from_metadata(self, metadata: object) -> str:
-        if not isinstance(metadata, dict):
-            return "default"
-        canvas_meta = metadata.get("canvas")
-        if isinstance(canvas_meta, dict):
-            value = self._first_non_empty(
-                canvas_meta,
-                ("kind", "type", "style", "edge"),
-            )
-            if value:
-                return value
-        value = self._first_non_empty(
-            metadata,
-            ("canvas_kind", "ui_kind", "kind"),
-        )
-        return value or "default"
+        return edge_type if edge_type else "default"
 
     def _normalize_kind(self, kind: str) -> str:
         text = str(kind).strip()
         return text.casefold() if text else "default"
-
-    def _first_non_empty(
-        self,
-        mapping: Dict[str, object],
-        keys: tuple[str, ...],
-    ) -> Optional[str]:
-        for key in keys:
-            value = mapping.get(key)
-            if isinstance(value, str):
-                normalized = value.strip()
-                if normalized:
-                    return normalized
-        return None
 
 
 _DEFAULT_CONNECTION_PREVIEW_STYLE = ConnectionPreviewStyleOptions()
@@ -235,12 +201,9 @@ def _default_connection_preview_factory(
     return _DEFAULT_CONNECTION_PREVIEW_STYLE
 
 
-canvas_registry = CanvasRegistry()
-
 __all__ = [
     "CanvasRegistry",
     "ConnectionPreviewStyleOptions",
     "EdgeItemFactory",
     "NodeItemFactory",
-    "canvas_registry",
 ]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from py_editor.models import CanvasState, EdgeData, NodeData
+from py_editor.models import SCHEMA_VERSION, CanvasState, EdgeData, NodeData, Port, Viewport
 
 
 def test_node_serialization_roundtrip() -> None:
@@ -11,8 +11,7 @@ def test_node_serialization_roundtrip() -> None:
         title="Example",
         node_type="demo",
         position=(12.5, 34.0),
-        inputs=["in"],
-        outputs=["out"],
+        ports=[Port("in", "input"), Port("out", "output")],
         metadata={"extra": True},
     )
     payload = node.to_dict()
@@ -70,12 +69,16 @@ def test_canvas_state_serialization_roundtrip() -> None:
 
     assert restored.nodes == state.nodes
     assert restored.edges == state.edges
+    assert restored.viewport == state.viewport
+    assert payload["schema_version"] == SCHEMA_VERSION
     assert restored.selection.nodes == state.selection.nodes
     assert restored.selection.edges == state.selection.edges
 
 
 def test_canvas_state_from_dict_validates_edges() -> None:
     payload = {
+        "schema_version": SCHEMA_VERSION,
+        "viewport": {"x": 0.0, "y": 0.0, "zoom": 1.0},
         "nodes": [NodeData(id="a", title="A").to_dict()],
         "edges": [
             {
@@ -89,24 +92,33 @@ def test_canvas_state_from_dict_validates_edges() -> None:
         CanvasState.from_dict(payload)
 
 
-def test_node_from_dict_validates_inputs_outputs() -> None:
-    payload = {
-        "id": "bad",
-        "title": "Bad",
-        "inputs": "not-list",
-    }
+def test_string_ports_and_old_documents_are_rejected() -> None:
     with pytest.raises(ValueError):
-        NodeData.from_dict(payload)
+        NodeData.from_dict({"id": "old", "inputs": ["in"], "outputs": ["out"]})
+    with pytest.raises(ValueError):
+        NodeData.from_dict(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "id": "bad",
+                "ports": ["in"],
+                "draggable": True,
+                "selectable": True,
+                "connectable": True,
+                "deletable": True,
+            }
+        )
+    with pytest.raises(ValueError):
+        CanvasState.from_dict({"schema_version": SCHEMA_VERSION, "nodes": []})
+    with pytest.raises(ValueError):
+        NodeData("dup", "Dup", ports=[Port("in", "input"), Port("in", "input")])
+    both_sides = NodeData("join", "Join", ports=[Port("left", "input"), Port("left", "output")])
+    assert [port.id for port in both_sides.ports] == ["left", "left"]
 
 
-def test_node_from_dict_legacy_canvas_metadata() -> None:
-    payload = {
-        "id": "legacy",
-        "title": "Legacy",
-        "node_type": "legacy-demo",
-    }
-    node = NodeData.from_dict(payload)
-    assert node.node_type == "legacy-demo"
+def test_viewport_roundtrip() -> None:
+    state = CanvasState(viewport=Viewport(12.0, -4.0, 0.5))
+    restored = CanvasState.from_dict(state.to_dict())
+    assert restored.viewport == Viewport(12.0, -4.0, 0.5)
 
 
 def test_edge_from_dict_legacy_canvas_metadata() -> None:

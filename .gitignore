@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Test and audit output
+.pytest_cache/
+tests/_audit_last.json

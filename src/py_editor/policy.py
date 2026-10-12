@@ -6,10 +6,10 @@ connection is allowed, which input edge it replaces, and which port is nearest.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
-from .models import CanvasState, EdgeData, NodeData
+from .models import CanvasState, EdgeData, NodeData, Port
 
 __all__ = [
     "CanvasPolicy",
@@ -48,7 +48,7 @@ class ConnectResult:
     """Outcome of validating or applying a connection.
 
     ``reason`` is one of ``ok``, ``unknown-node``, ``missing-port``, ``self``,
-    ``type``, ``cycle``, ``duplicate``, or ``cancelled``.
+    ``type``, ``cycle``, ``duplicate``, ``locked``, or ``cancelled``.
     """
 
     accepted: bool
@@ -67,15 +67,16 @@ class CanvasPolicy:
 
     ``snap_radius`` is the maximum distance, in scene pixels, at which a dragged
     wire attaches to a port. ``single_input`` replaces any edge already plugged
-    into the target port, except a port listed in the target node's
-    ``multi_inputs`` metadata. ``allow_cycles`` permits a connection that would
-    loop back to its source. Ports with declared kinds refuse a wire when the
-    kinds differ; a port with no kind still accepts any wire.
+    into the target port, unless that port has ``multi``. ``allow_cycles``
+    permits a connection that would loop back to its source. Ports with declared
+    kinds refuse a wire when the kinds differ; a port with no kind still accepts
+    any wire. ``extra_rules`` run after the built-in checks and can reject.
     """
 
     snap_radius: float = 24.0
     single_input: bool = True
     allow_cycles: bool = False
+    extra_rules: tuple[Callable[[CanvasState, ConnectRequest], ConnectResult | None], ...] = ()
 
     def evaluate(
         self,
@@ -100,16 +101,29 @@ class CanvasPolicy:
                 source=request.source,
                 target=request.target,
             )
-        source_port = _resolve_port(source_node.outputs, request.source_port)
-        target_port = _resolve_port(target_node.inputs, request.target_port)
+        if not source_node.connectable or not target_node.connectable:
+            return ConnectResult(
+                accepted=False,
+                reason="locked",
+                source=request.source,
+                target=request.target,
+            )
+        source_port = _resolve_port(
+            [port for port in source_node.ports if port.side == "output"],
+            request.source_port,
+        )
+        target_port = _resolve_port(
+            [port for port in target_node.ports if port.side == "input"],
+            request.target_port,
+        )
         if source_port is None or target_port is None:
             return ConnectResult(
                 accepted=False,
                 reason="missing-port",
                 source=request.source,
                 target=request.target,
-                source_port=source_port,
-                target_port=target_port,
+                source_port=None if source_port is None else source_port.id,
+                target_port=None if target_port is None else target_port.id,
             )
         if request.source == request.target:
             return ConnectResult(
@@ -117,24 +131,26 @@ class CanvasPolicy:
                 reason="self",
                 source=request.source,
                 target=request.target,
-                source_port=source_port,
-                target_port=target_port,
+                source_port=source_port.id,
+                target_port=target_port.id,
             )
-        source_kind = _port_kind(source_node, "outputs", source_port)
-        target_kind = _port_kind(target_node, "inputs", target_port)
-        if source_kind is not None and target_kind is not None and source_kind != target_kind:
+        if (
+            source_port.kind is not None
+            and target_port.kind is not None
+            and source_port.kind != target_port.kind
+        ):
             return ConnectResult(
                 accepted=False,
                 reason="type",
                 source=request.source,
                 target=request.target,
-                source_port=source_port,
-                target_port=target_port,
+                source_port=source_port.id,
+                target_port=target_port.id,
             )
 
         ignored = {edge_id for edge_id in ignore}
-        replaced = _input_edge_ids(state, request.target, target_port)
-        keeps_existing = not self.single_input or _accepts_many(target_node, target_port)
+        replaced = _input_edge_ids(state, request.target, target_port.id)
+        keeps_existing = not self.single_input or target_port.multi
         if keeps_existing:
             replaced = []
         else:
@@ -143,9 +159,9 @@ class CanvasPolicy:
         existing = _matching_edge(
             state,
             request.source,
-            source_port,
+            source_port.id,
             request.target,
-            target_port,
+            target_port.id,
         )
         if existing is not None:
             return ConnectResult(
@@ -153,8 +169,8 @@ class CanvasPolicy:
                 reason="duplicate",
                 source=request.source,
                 target=request.target,
-                source_port=source_port,
-                target_port=target_port,
+                source_port=source_port.id,
+                target_port=target_port.id,
             )
         if not self.allow_cycles and introduces_cycle(
             state,
@@ -167,17 +183,27 @@ class CanvasPolicy:
                 reason="cycle",
                 source=request.source,
                 target=request.target,
-                source_port=source_port,
-                target_port=target_port,
+                source_port=source_port.id,
+                target_port=target_port.id,
             )
+        resolved = ConnectRequest(
+            source=request.source,
+            target=request.target,
+            source_port=source_port.id,
+            target_port=target_port.id,
+        )
+        for rule in self.extra_rules:
+            verdict = rule(state, resolved)
+            if verdict is not None and not verdict.accepted:
+                return verdict
         removed = tuple(dict.fromkeys([*replaced, *ignore]))
         return ConnectResult(
             accepted=True,
             reason="ok",
             source=request.source,
             target=request.target,
-            source_port=source_port,
-            target_port=target_port,
+            source_port=source_port.id,
+            target_port=target_port.id,
             replaced_edge_ids=removed,
         )
 
@@ -223,17 +249,17 @@ def preferred_port(
     port so the new wire replaces the old one. Outputs use the first port.
     """
 
-    ports = node.outputs if direction == "output" else node.inputs
+    ports = [port for port in node.ports if port.side == direction]
     if not ports:
         return None
     if direction == "input" and policy.single_input:
         for port in ports:
-            if not _input_edge_ids(state, node.id, port):
-                return port
+            if not _input_edge_ids(state, node.id, port.id):
+                return port.id
         for port in ports:
-            if _accepts_many(node, port):
-                return port
-    return ports[0]
+            if port.multi:
+                return port.id
+    return ports[0].id
 
 
 def introduces_cycle(
@@ -247,6 +273,11 @@ def introduces_cycle(
     if source == target:
         return True
     ignored = set(ignore)
+    outgoing: dict[str, list[str]] = {}
+    for edge in state.edges.values():
+        if edge.id in ignored:
+            continue
+        outgoing.setdefault(edge.source, []).append(edge.target)
     seen: set[str] = set()
     stack = [target]
     while stack:
@@ -254,48 +285,25 @@ def introduces_cycle(
         if current in seen:
             continue
         seen.add(current)
-        for edge in state.edges.values():
-            if edge.id in ignored or edge.source != current:
-                continue
-            if edge.target == source:
+        for nxt in outgoing.get(current, ()):
+            if nxt == source:
                 return True
-            stack.append(edge.target)
+            stack.append(nxt)
     return False
 
 
-def _resolve_port(ports: list[str], requested: str | None) -> str | None:
+def _resolve_port(ports: list[Port], requested: str | None) -> Port | None:
     cleaned = requested.strip() if isinstance(requested, str) else None
     if cleaned == "":
         cleaned = None
     if cleaned is not None:
-        return cleaned if cleaned in ports else None
+        for port in ports:
+            if port.id == cleaned:
+                return port
+        return None
     if len(ports) == 1:
         return ports[0]
     return None
-
-
-def _accepts_many(node: NodeData, port_id: str) -> bool:
-    """A port listed in ``multi_inputs`` keeps every wire plugged into it."""
-
-    listed = node.metadata.get("multi_inputs")
-    if isinstance(listed, (list, tuple)):
-        return port_id in {str(item) for item in listed}
-    return False
-
-
-def _port_kind(node: NodeData, side: str, port_id: str) -> str | None:
-    """Return the declared kind of one port, or None when the node has none."""
-
-    raw = node.metadata.get("port_types")
-    if not isinstance(raw, dict):
-        return None
-    side_map = raw.get(side)
-    if not isinstance(side_map, dict):
-        return None
-    kind = side_map.get(port_id)
-    if kind is None or str(kind).strip() == "":
-        return None
-    return str(kind)
 
 
 def _input_edge_ids(state: CanvasState, node_id: str, port_id: str) -> list[str]:

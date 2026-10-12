@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import time
+
 from py_editor.controller import CanvasController
 from py_editor.graphics import node_height
-from py_editor.policy import PortHit, nearest_port, preferred_port
+from py_editor.models import CanvasState, EdgeData, NodeData, Port
+from py_editor.policy import PortHit, introduces_cycle, nearest_port, preferred_port
 
 
 def _graph():
     controller = CanvasController()
-    source = controller.create_node("Source", outputs=["out"])
-    other = controller.create_node("Other", outputs=["out"])
-    sink = controller.create_node("Sink", inputs=["in"])
+    source = controller.create_node("Source", ports=[Port("out", "output")])
+    other = controller.create_node("Other", ports=[Port("out", "output")])
+    sink = controller.create_node("Sink", ports=[Port("in", "input")])
     return controller, source, other, sink
 
 
@@ -39,7 +42,7 @@ def test_second_input_replaces_the_first_in_one_undo() -> None:
 
 def test_output_can_fan_out() -> None:
     controller, source, _other, sink = _graph()
-    extra = controller.create_node("Extra", inputs=["in"])
+    extra = controller.create_node("Extra", ports=[Port("in", "input")])
     assert controller.connect(source.id, sink.id).accepted
     assert controller.connect(source.id, extra.id).accepted
     assert len(controller.state.edges) == 2
@@ -47,9 +50,9 @@ def test_output_can_fan_out() -> None:
 
 def test_cycle_is_rejected_without_changing_the_graph() -> None:
     controller = CanvasController()
-    first = controller.create_node("A", inputs=["in"], outputs=["out"])
-    second = controller.create_node("B", inputs=["in"], outputs=["out"])
-    third = controller.create_node("C", inputs=["in"], outputs=["out"])
+    first = controller.create_node("A", ports=[Port("in", "input"), Port("out", "output")])
+    second = controller.create_node("B", ports=[Port("in", "input"), Port("out", "output")])
+    third = controller.create_node("C", ports=[Port("in", "input"), Port("out", "output")])
     assert controller.connect(first.id, second.id).accepted
     assert controller.connect(second.id, third.id).accepted
     rejected = controller.connect(third.id, first.id)
@@ -70,23 +73,50 @@ def test_duplicate_connection_does_not_push_undo() -> None:
 
 def test_self_connection_is_rejected() -> None:
     controller = CanvasController()
-    node = controller.create_node("Loop", inputs=["in"], outputs=["out"])
+    node = controller.create_node("Loop", ports=[Port("in", "input"), Port("out", "output")])
     result = controller.connect(node.id, node.id)
     assert result.reason == "self"
 
 
 def test_ambiguous_ports_must_be_named() -> None:
     controller = CanvasController()
-    source = controller.create_node("Source", outputs=["a", "b"])
-    sink = controller.create_node("Sink", inputs=["in"])
+    source = controller.create_node("Source", ports=[Port("a", "output"), Port("b", "output")])
+    sink = controller.create_node("Sink", ports=[Port("in", "input")])
     result = controller.connect(source.id, sink.id)
     assert result.reason == "missing-port"
 
 
+def test_long_chain_cycle_check_follows_edges_instead_of_rescanning() -> None:
+    state = CanvasState()
+    count = 4000
+    for index in range(count):
+        state.nodes[f"n{index}"] = NodeData(
+            f"n{index}",
+            f"Step {index}",
+            ports=[]
+            if index == 0
+            else [Port("in", "input")]
+            if index == count - 1
+            else [Port("in", "input"), Port("out", "output")],
+        )
+        if index:
+            state.edges[f"e{index}"] = EdgeData(
+                f"e{index}",
+                f"n{index - 1}",
+                f"n{index}",
+                source_port="out",
+                target_port="in",
+            )
+    started = time.perf_counter()
+    assert introduces_cycle(state, f"n{count - 1}", "n0") is True
+    assert introduces_cycle(state, "n0", f"n{count - 1}") is False
+    assert time.perf_counter() - started < 0.05
+
+
 def test_swap_direction_is_not_a_cycle() -> None:
     controller = CanvasController()
-    left = controller.create_node("Left", inputs=["in"], outputs=["out"])
-    right = controller.create_node("Right", inputs=["in"], outputs=["out"])
+    left = controller.create_node("Left", ports=[Port("in", "input"), Port("out", "output")])
+    right = controller.create_node("Right", ports=[Port("in", "input"), Port("out", "output")])
     created = controller.connect(left.id, right.id)
     assert created.edge_id is not None
     swapped = controller.connect(
@@ -126,8 +156,11 @@ def test_nearest_port_respects_radius_direction_and_exclusion() -> None:
 
 def test_preferred_port_uses_the_first_free_input() -> None:
     controller = CanvasController()
-    source = controller.create_node("Source", outputs=["out"])
-    sink = controller.create_node("Sink", inputs=["left", "right"])
+    source = controller.create_node("Source", ports=[Port("out", "output")])
+    sink = controller.create_node(
+        "Sink",
+        ports=[Port("left", "input"), Port("right", "input")],
+    )
     controller.connect(source.id, sink.id, target_port="left")
     port = preferred_port(
         controller.state,
@@ -156,12 +189,11 @@ def test_delete_selection_undo_restores_nodes_and_edges() -> None:
 
 def test_multi_input_keeps_every_wire() -> None:
     controller = CanvasController()
-    first = controller.create_node("First", outputs=["out"])
-    second = controller.create_node("Second", outputs=["out"])
+    first = controller.create_node("First", ports=[Port("out", "output")])
+    second = controller.create_node("Second", ports=[Port("out", "output")])
     union = controller.create_node(
         "Union",
-        inputs=["Input"],
-        metadata={"multi_inputs": ["Input"]},
+        ports=[Port("Input", "input", multi=True)],
     )
     assert controller.connect(first.id, union.id).accepted
     assert controller.connect(second.id, union.id).accepted
@@ -174,15 +206,13 @@ def test_declared_port_kinds_must_match() -> None:
     controller = CanvasController()
     source = controller.create_node(
         "Picture",
-        outputs=["out"],
-        metadata={"port_types": {"outputs": {"out": "image"}}},
+        ports=[Port("out", "output", kind="image")],
     )
     sink = controller.create_node(
         "Table",
-        inputs=["in"],
-        metadata={"port_types": {"inputs": {"in": "table"}}},
+        ports=[Port("in", "input", kind="table")],
     )
     rejected = controller.connect(source.id, sink.id)
     assert rejected.reason == "type"
-    plain = controller.create_node("Plain", outputs=["out"])
+    plain = controller.create_node("Plain", ports=[Port("out", "output")])
     assert controller.connect(plain.id, sink.id).accepted

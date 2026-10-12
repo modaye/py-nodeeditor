@@ -14,13 +14,12 @@ from PySide6.QtGui import (
     QPainterPathStroker,
     QPen,
 )
-from PySide6.QtWidgets import QGraphicsObject, QGraphicsPathItem, QStyle
+from PySide6.QtWidgets import QGraphicsItem, QGraphicsObject, QGraphicsPathItem, QStyle
 
 from .models import EdgeData, NodeData
 from .policy import PortHit
 
 __all__ = [
-    "CanvasConnectionHandle",
     "CanvasEdgeItem",
     "CanvasNodeItem",
     "node_height",
@@ -42,123 +41,6 @@ def node_height(port_rows: int) -> float:
     return max(MIN_NODE_HEIGHT, HEADER_HEIGHT + 16.0 + rows * PORT_PITCH)
 
 
-class CanvasConnectionHandle(QGraphicsObject):
-    """Round port. The hit target is larger than the painted dot."""
-
-    drag_started = Signal(str, str, str, QPointF)
-    drag_moved = Signal(str, str, str, QPointF)
-    drag_finished = Signal(str, str, str, QPointF)
-
-    def __init__(
-        self,
-        node_id: str,
-        direction: str,
-        port_id: str,
-        parent: QGraphicsObject | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.node_id = node_id
-        self.direction = direction
-        self.port_id = port_id
-        self._hovered = False
-        self._dragging = False
-        self._emphasis = "idle"
-        self._press_pos = QPointF()
-        self.setAcceptHoverEvents(True)
-        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
-        self.setCursor(Qt.CursorShape.CrossCursor)
-        self.setZValue(20.0)
-
-    @property
-    def emphasis(self) -> str:
-        return self._emphasis
-
-    def set_emphasis(self, emphasis: str) -> None:
-        if emphasis == self._emphasis:
-            return
-        self._emphasis = emphasis
-        self.update()
-
-    def boundingRect(self) -> QRectF:  # type: ignore[override]
-        radius = HANDLE_HIT_RADIUS
-        return QRectF(-radius, -radius, radius * 2, radius * 2)
-
-    def paint(self, painter: QPainter, option, widget=None) -> None:
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        color = QColor("#7C3AED" if self.direction == "input" else "#2563EB")
-        radius = 5.0
-        if self._emphasis == "active":
-            color = QColor("#1D4ED8")
-            radius = 6.5
-        elif self._emphasis == "invalid":
-            color = QColor("#DC2626")
-            radius = 6.5
-        elif self._emphasis == "compatible":
-            color = QColor("#93C5FD")
-        elif self._hovered or self._dragging:
-            color = color.lighter(120)
-        painter.setBrush(color)
-        painter.setPen(QPen(QColor("#FFFFFF"), 1.5))
-        painter.drawEllipse(QRectF(-radius, -radius, radius * 2, radius * 2))
-
-    def hoverEnterEvent(self, event) -> None:  # type: ignore[override]
-        self._hovered = True
-        self.update()
-        super().hoverEnterEvent(event)
-
-    def hoverLeaveEvent(self, event) -> None:  # type: ignore[override]
-        self._hovered = False
-        self.update()
-        super().hoverLeaveEvent(event)
-
-    def mousePressEvent(self, event) -> None:  # type: ignore[override]
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._press_pos = event.pos()
-            self._dragging = False
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
-        if not (event.buttons() & Qt.MouseButton.LeftButton):
-            super().mouseMoveEvent(event)
-            return
-        if not self._dragging:
-            if (event.pos() - self._press_pos).manhattanLength() >= 4.0:
-                self._dragging = True
-                self.drag_started.emit(
-                    self.node_id,
-                    self.direction,
-                    self.port_id,
-                    self.scenePos(),
-                )
-        if self._dragging:
-            self.drag_moved.emit(
-                self.node_id,
-                self.direction,
-                self.port_id,
-                event.scenePos(),
-            )
-            event.accept()
-            self.update()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
-        if event.button() == Qt.MouseButton.LeftButton and self._dragging:
-            self.drag_finished.emit(
-                self.node_id,
-                self.direction,
-                self.port_id,
-                event.scenePos(),
-            )
-            self._dragging = False
-            self.update()
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-
 class CanvasNodeItem(QGraphicsObject):
     """Rounded node card whose height follows the number of ports."""
 
@@ -174,20 +56,21 @@ class CanvasNodeItem(QGraphicsObject):
         self._node = node.clone()
         self.node_id = node.id
         self._hovered = False
+        self._compact = False
+        self._emphasis: dict[tuple[str, str], str] = {}
+        self._hovered_port: tuple[str, str] | None = None
+        self._port_press: tuple[str, str] | None = None
+        self._port_dragging = False
+        self._press_pos = QPointF()
+        self._shape_cache: QPainterPath | None = None
         self._width = NODE_WIDTH
-        self._height = node_height(max(len(node.inputs), len(node.outputs)))
-        self.setFlag(self.GraphicsItemFlag.ItemIsMovable, True)
-        self.setFlag(self.GraphicsItemFlag.ItemIsSelectable, True)
+        self._height = node_height(max(len(node.port_ids("input")), len(node.port_ids("output"))))
         self.setFlag(self.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self._apply_flags()
         self.setZValue(10.0)
         self.setPos(node.position[0], node.position[1])
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.CursorShape.ArrowCursor)
-        self._input_handles: dict[str, CanvasConnectionHandle] = {}
-        self._output_handles: dict[str, CanvasConnectionHandle] = {}
-        self._rebuild_handles_for_direction("input", self._node.inputs)
-        self._rebuild_handles_for_direction("output", self._node.outputs)
-        self._position_handles()
 
     @property
     def card_size(self) -> tuple[float, float]:
@@ -200,34 +83,56 @@ class CanvasNodeItem(QGraphicsObject):
         return QRectF(-margin, -4.0, self._width + margin * 2, self._height + 8.0)
 
     def shape(self) -> QPainterPath:  # type: ignore[override]
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(0.0, 0.0, self._width, self._height), 8.0, 8.0)
-        for handle in (*self._input_handles.values(), *self._output_handles.values()):
-            path.addEllipse(handle.pos(), 8.0, 8.0)
-        return path
+        if self._shape_cache is None:
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(0.0, 0.0, self._width, self._height), 8.0, 8.0)
+            if not self._compact:
+                for direction in ("input", "output"):
+                    for port_id in self._node.port_ids(direction):
+                        path.addEllipse(self.port_anchor(direction, port_id), 8.0, 8.0)
+            self._shape_cache = path
+        return self._shape_cache
+
+    def set_compact(self, compact: bool) -> None:
+        """Draw a plain block when the card is only a few pixels on screen."""
+
+        if compact == self._compact:
+            return
+        self._compact = compact
+        self._shape_cache = None
+        self.update()
+
+    def same_visual(self, node: NodeData) -> bool:
+        """Return whether ``node`` would paint the same card already on screen."""
+
+        current = self._node
+        return (
+            current.position == node.position
+            and current.title == node.title
+            and current.node_type == node.node_type
+            and             current.ports == node.ports
+            and current.draggable == node.draggable
+            and current.selectable == node.selectable
+            and current.connectable == node.connectable
+            and current.deletable == node.deletable
+            and current.metadata == node.metadata
+        )
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         if option.state & QStyle.StateFlag.State_Selected:
             option.state &= ~QStyle.StateFlag.State_Selected
         rect = QRectF(0.0, 0.0, self._width, self._height)
+        if self._compact:
+            self._paint_compact(painter, rect)
+            return
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         radius = 8.0
-        border = _run_color(self)
-        disabled = bool(self._node.metadata.get("disabled"))
-        if border is None and disabled:
-            border = QColor("#64748B")
-        elif border is None:
-            border = QColor("#2563EB") if self.isSelected() else QColor("#CBD5E1")
-            if not self.isSelected() and self._hovered:
-                border = QColor("#94A3B8")
-        painter.setPen(QPen(border, 2.2 if _run_state(self) else (1.6 if self.isSelected() else 1.2)))
+        border = QColor("#2563EB") if self.isSelected() else QColor("#CBD5E1")
+        if not self.isSelected() and self._hovered:
+            border = QColor("#94A3B8")
+        painter.setPen(QPen(border, 1.6 if self.isSelected() else 1.2))
         painter.setBrush(QColor("#FFFFFF"))
         painter.drawRoundedRect(rect, radius, radius)
-        accent = _run_color(self)
-        if accent is not None:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(accent)
-            painter.drawRoundedRect(QRectF(0.0, 0.0, 4.0, self._height), 2.0, 2.0)
 
         clip = QPainterPath()
         clip.addRoundedRect(rect, radius, radius)
@@ -239,51 +144,33 @@ class CanvasNodeItem(QGraphicsObject):
         painter.restore()
 
         painter.setPen(QColor("#0F172A"))
-        label = str(self._node.metadata.get("run_label") or "")
-        if not label and disabled:
-            label = "禁用"
         metrics = painter.fontMetrics()
-        label_width = 0.0
-        if label:
-            label_width = min(metrics.horizontalAdvance(label) + 4.0, self._width * 0.46)
-        title_width = max(self._width - 28.0 - label_width, 24.0)
+        title_width = max(self._width - 28.0, 24.0)
         painter.drawText(
             QRectF(12.0, 0.0, title_width, HEADER_HEIGHT),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             metrics.elidedText(self._node.title, Qt.TextElideMode.ElideRight, int(title_width)),
         )
-        if label:
-            painter.setPen(_run_color(self) or QColor("#64748B"))
-            painter.drawText(
-                QRectF(self._width - 10.0 - label_width, 0.0, label_width, HEADER_HEIGHT),
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                label,
-            )
         painter.setPen(QColor("#64748B"))
         self._draw_port_labels(painter)
 
     def update_from_node(self, node: NodeData) -> None:
         """Apply model changes without rebuilding the item."""
 
-        previous_inputs = list(self._node.inputs)
-        previous_outputs = list(self._node.outputs)
+        previous_ports = self._node.ports
         self._node = node.clone()
-        height = node_height(max(len(node.inputs), len(node.outputs)))
-        if height != self._height:
+        self._apply_flags()
+        height = node_height(max(len(node.port_ids("input")), len(node.port_ids("output"))))
+        ports_changed = previous_ports != self._node.ports
+        if height != self._height or ports_changed:
             self.prepareGeometryChange()
             self._height = height
+            self._shape_cache = None
         blocked = self.blockSignals(True)
         self.setPos(node.position[0], node.position[1])
         self.blockSignals(blocked)
         self.update()
-        inputs_changed = previous_inputs != self._node.inputs
-        outputs_changed = previous_outputs != self._node.outputs
-        if inputs_changed:
-            self._rebuild_handles_for_direction("input", self._node.inputs)
-        if outputs_changed:
-            self._rebuild_handles_for_direction("output", self._node.outputs)
-        self._position_handles()
-        if inputs_changed or outputs_changed:
+        if ports_changed:
             self.ports_changed.emit(self.node_id)
 
     def commit_position(self, x: float, y: float) -> None:
@@ -295,37 +182,28 @@ class CanvasNodeItem(QGraphicsObject):
         """Scene positions of every port, used for magnetic snapping."""
 
         hits: list[PortHit] = []
-        groups = (
-            ("input", self._input_handles),
-            ("output", self._output_handles),
-        )
-        for direction, handles in groups:
-            for port_id, handle in handles.items():
-                pos = handle.scenePos()
-                hits.append(
-                    PortHit(self.node_id, direction, port_id, pos.x(), pos.y())
-                )
+        for direction in ("input", "output"):
+            for port_id in self._node.port_ids(direction):
+                pos = self.mapToScene(self.port_anchor(direction, port_id))
+                hits.append(PortHit(self.node_id, direction, port_id, pos.x(), pos.y()))
         return hits
 
     def set_handle_emphasis(self, emphasis: dict[tuple[str, str], str]) -> None:
         """Mark ports as ``idle``, ``compatible``, ``active``, or ``invalid``."""
 
-        for handle in (*self._input_handles.values(), *self._output_handles.values()):
-            mode = emphasis.get((handle.direction, handle.port_id), "idle")
-            handle.set_emphasis(mode)
+        if emphasis == self._emphasis:
+            return
+        self._emphasis = dict(emphasis)
+        self.update()
 
     def port_scene_position(self, direction: str, port_id: str | None) -> QPointF:
-        handle = None
-        if direction == "input" and port_id is not None:
-            handle = self._input_handles.get(port_id)
-        elif direction == "output" and port_id is not None:
-            handle = self._output_handles.get(port_id)
-        if handle is not None:
-            return handle.scenePos()
+        ports = self._node.port_ids(direction)
+        if port_id is not None and port_id in ports:
+            return self.mapToScene(self.port_anchor(direction, port_id))
         rect = QRectF(0.0, 0.0, self._width, self._height)
         return self.mapToScene(rect.center())
 
-    def itemChange(self, change, value):  # type: ignore[override]
+    def itemChange(self, change: QGraphicsItem.GraphicsItemChange, value: object) -> object:
         if (
             change == self.GraphicsItemChange.ItemPositionHasChanged
             and not self.signalsBlocked()
@@ -343,59 +221,131 @@ class CanvasNodeItem(QGraphicsObject):
         self.update()
         super().hoverEnterEvent(event)
 
+    def hoverMoveEvent(self, event) -> None:  # type: ignore[override]
+        port = self._port_at(event.pos())
+        if port != self._hovered_port:
+            self._hovered_port = port
+            self.setCursor(
+                Qt.CursorShape.CrossCursor if port is not None else Qt.CursorShape.ArrowCursor
+            )
+            self.update()
+        super().hoverMoveEvent(event)
+
     def hoverLeaveEvent(self, event) -> None:  # type: ignore[override]
         self._hovered = False
+        self._hovered_port = None
+        self.setCursor(Qt.CursorShape.ArrowCursor)
         self.update()
         super().hoverLeaveEvent(event)
 
-    def _position_handles(self) -> None:
-        self._position_port_group(self._input_handles, -HANDLE_OFFSET)
-        self._position_port_group(self._output_handles, self._width + HANDLE_OFFSET)
-
-    def _position_port_group(
-        self,
-        handles: dict[str, CanvasConnectionHandle],
-        x: float,
-    ) -> None:
-        count = len(handles)
-        if count == 0:
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        port = self._port_at(event.pos()) if event.button() == Qt.MouseButton.LeftButton else None
+        if port is not None:
+            self._port_press = port
+            self._port_dragging = False
+            self._press_pos = event.pos()
+            event.accept()
             return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        if self._port_press is None or not (event.buttons() & Qt.MouseButton.LeftButton):
+            super().mouseMoveEvent(event)
+            return
+        if not self._port_dragging:
+            if (event.pos() - self._press_pos).manhattanLength() < 4.0:
+                event.accept()
+                return
+            self._port_dragging = True
+            direction, port_id = self._port_press
+            self.connection_drag_started.emit(
+                self.node_id,
+                direction,
+                port_id,
+                self.mapToScene(self.port_anchor(direction, port_id)),
+            )
+        direction, port_id = self._port_press
+        self.connection_drag_moved.emit(self.node_id, direction, port_id, event.scenePos())
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
+        port = self._port_press
+        dragging = self._port_dragging
+        self._port_press = None
+        self._port_dragging = False
+        if port is not None and event.button() == Qt.MouseButton.LeftButton:
+            if dragging:
+                direction, port_id = port
+                self.connection_drag_finished.emit(
+                    self.node_id,
+                    direction,
+                    port_id,
+                    event.scenePos(),
+                )
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _paint_compact(self, painter: QPainter, rect: QRectF) -> None:
+        # A 1px border disappears once the card is only a few screen pixels.
+        if self.isSelected():
+            fill = QColor("#DBEAFE")
+            border = QColor("#2563EB")
+        else:
+            fill = QColor("#FFFFFF")
+            border = QColor("#94A3B8")
+        painter.setPen(QPen(border, 1))
+        painter.setBrush(fill)
+        painter.drawRect(rect)
+
+    def port_anchor(self, direction: str, port_id: str) -> QPointF:
+        """Local point of a port. Paint, hit testing, and wires all use this."""
+
+        ports = self._node.port_ids(direction)
+        count = len(ports)
+        index = ports.index(port_id) if port_id in ports else 0
+        x = -HANDLE_OFFSET if direction == "input" else self._width + HANDLE_OFFSET
         top = HEADER_HEIGHT + 8.0
         bottom = self._height - 12.0
-        for index, handle in enumerate(handles.values()):
-            if count == 1:
-                y = (top + bottom) / 2.0
-            else:
-                y = top + (bottom - top) * index / (count - 1)
-            handle.setPos(x, y)
+        if count <= 1:
+            y = (top + bottom) / 2.0
+        else:
+            y = top + (bottom - top) * index / (count - 1)
+        return QPointF(x, y)
 
-    def _rebuild_handles_for_direction(self, direction: str, ports: list[str]) -> None:
-        mapping = self._input_handles if direction == "input" else self._output_handles
-        for handle in mapping.values():
-            handle.setParentItem(None)
-            handle.deleteLater()
-        mapping.clear()
-        for port_id in ports:
-            handle = CanvasConnectionHandle(self.node_id, direction, port_id, self)
-            handle.drag_started.connect(self.connection_drag_started)
-            handle.drag_moved.connect(self.connection_drag_moved)
-            handle.drag_finished.connect(self.connection_drag_finished)
-            mapping[port_id] = handle
+    def _apply_flags(self) -> None:
+        self.setFlag(self.GraphicsItemFlag.ItemIsMovable, self._node.draggable)
+        self.setFlag(self.GraphicsItemFlag.ItemIsSelectable, self._node.selectable)
+
+    def _port_at(self, local: QPointF) -> tuple[str, str] | None:
+        if self._compact:
+            return None
+        limit = HANDLE_HIT_RADIUS * HANDLE_HIT_RADIUS
+        best: tuple[str, str] | None = None
+        best_distance = limit
+        for direction in ("input", "output"):
+            for port_id in self._node.port_ids(direction):
+                pos = self.port_anchor(direction, port_id)
+                distance = (local.x() - pos.x()) ** 2 + (local.y() - pos.y()) ** 2
+                if distance <= best_distance:
+                    best = (direction, port_id)
+                    best_distance = distance
+        return best
 
     def _draw_port_labels(self, painter: QPainter) -> None:
-        if not self._node.inputs and not self._node.outputs:
+        if not self._node.ports:
             return
         label_height = max(painter.fontMetrics().height(), 14)
         half_width = max((self._width - 28.0) * 0.5, 0.0)
-        for port_id, handle in self._input_handles.items():
-            pos = handle.pos()
+        for port_id in self._node.port_ids("input"):
+            pos = self.port_anchor("input", port_id)
             painter.drawText(
                 QRectF(14.0, pos.y() - label_height / 2.0, half_width, label_height),
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                 port_id,
             )
-        for port_id, handle in self._output_handles.items():
-            pos = handle.pos()
+        for port_id in self._node.port_ids("output"):
+            pos = self.port_anchor("output", port_id)
             painter.drawText(
                 QRectF(
                     self._width - 14.0 - half_width,
@@ -406,6 +356,30 @@ class CanvasNodeItem(QGraphicsObject):
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
                 port_id,
             )
+        self._paint_ports(painter)
+
+    def _paint_ports(self, painter: QPainter) -> None:
+        for direction in ("input", "output"):
+            for port_id in self._node.port_ids(direction):
+                pos = self.port_anchor(direction, port_id)
+                mode = self._emphasis.get((direction, port_id), "idle")
+                color = QColor("#7C3AED" if direction == "input" else "#2563EB")
+                radius = 5.0
+                if mode == "active":
+                    color = QColor("#1D4ED8")
+                    radius = 6.5
+                elif mode == "invalid":
+                    color = QColor("#DC2626")
+                    radius = 6.5
+                elif mode == "compatible":
+                    color = QColor("#93C5FD")
+                elif self._hovered_port == (direction, port_id) or (
+                    self._port_dragging and self._port_press == (direction, port_id)
+                ):
+                    color = color.lighter(120)
+                painter.setBrush(color)
+                painter.setPen(QPen(QColor("#FFFFFF"), 1.5))
+                painter.drawEllipse(QRectF(pos.x() - radius, pos.y() - radius, radius * 2, radius * 2))
 
     @property
     def node_data(self) -> NodeData:
@@ -438,9 +412,13 @@ class CanvasEdgeItem(QGraphicsPathItem, QObject):
         self._hovered = False
         self._detached = False
         self._dragging = False
+        self._compact = False
+        self._shape_cache: QPainterPath | None = None
         self._endpoint: str | None = None
         self._press_pos = QPointF()
         self._relation = "normal"
+        self._flow_offset: float | None = None
+        self._at_nodes: tuple[float, float, float, float] | None = None
         self.setZValue(1.0)
         self.setFlag(self.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptHoverEvents(True)
@@ -460,9 +438,28 @@ class CanvasEdgeItem(QGraphicsPathItem, QObject):
         return source is self._source and target is self._target
 
     def update_from_edge(self, edge: EdgeData) -> None:
+        ports_same = (
+            edge.source == self._edge.source
+            and edge.target == self._edge.target
+            and edge.source_port == self._source_port
+            and edge.target_port == self._target_port
+        )
+        if ports_same and self._at_nodes == self._node_place():
+            if edge.metadata != self._edge.metadata or edge.edge_type != self._edge.edge_type:
+                self._edge = edge.clone()
+            return
         self._edge = edge.clone()
         self._source_port = edge.source_port
         self._target_port = edge.target_port
+        self.update_path()
+        self._update_pen()
+
+    def set_compact(self, compact: bool) -> None:
+        """Use a straight hairline when the graph is zoomed out."""
+
+        if compact == self._compact:
+            return
+        self._compact = compact
         self.update_path()
         self._update_pen()
 
@@ -472,13 +469,30 @@ class CanvasEdgeItem(QGraphicsPathItem, QObject):
         start = self._source.port_scene_position("output", self._source_port)
         end = self._target.port_scene_position("input", self._target_port)
         path = QPainterPath(start)
-        bend = max(abs(end.x() - start.x()) * 0.5, 48.0)
-        path.cubicTo(
-            QPointF(start.x() + bend, start.y()),
-            QPointF(end.x() - bend, end.y()),
-            end,
-        )
+        if self._compact:
+            path.lineTo(end)
+        else:
+            bend = max(abs(end.x() - start.x()) * 0.5, 48.0)
+            path.cubicTo(
+                QPointF(start.x() + bend, start.y()),
+                QPointF(end.x() - bend, end.y()),
+                end,
+            )
+        self._shape_cache = None
         self.setPath(path)
+        self._at_nodes = self._node_place()
+
+    def _node_place(self) -> tuple[float, float, float, float]:
+        """Node origins the current curve was built from.
+
+        A refresh can skip rebuilding when these have not moved. Port changes
+        go through ``update_path`` directly, so a matching origin still means
+        the anchors are the ones already in the path.
+        """
+
+        source = self._source.pos()
+        target = self._target.pos()
+        return (source.x(), source.y(), target.x(), target.y())
 
     def touches(self, node_ids: set[str]) -> bool:
         """Return whether either endpoint is in ``node_ids``."""
@@ -572,14 +586,14 @@ class CanvasEdgeItem(QGraphicsPathItem, QObject):
             return
         super().mouseReleaseEvent(event)
 
-    def itemChange(self, change, value):  # type: ignore[override]
+    def itemChange(self, change: QGraphicsItem.GraphicsItemChange, value: object) -> object:
         if change == self.GraphicsItemChange.ItemSelectedHasChanged:
             self._apply_z()
             self._update_pen()
         return super().itemChange(change, value)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, not self._compact)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         if option.state & QStyle.StateFlag.State_Selected:
             option.state &= ~QStyle.StateFlag.State_Selected
@@ -587,11 +601,13 @@ class CanvasEdgeItem(QGraphicsPathItem, QObject):
         painter.drawPath(self.path())
 
     def shape(self) -> QPainterPath:  # type: ignore[override]
-        stroker = QPainterPathStroker()
-        stroker.setWidth(14.0)
-        stroker.setCapStyle(Qt.PenCapStyle.RoundCap)
-        stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        return stroker.createStroke(self.path())
+        if self._shape_cache is None:
+            stroker = QPainterPathStroker()
+            stroker.setWidth(8.0 if self._compact else 14.0)
+            stroker.setCapStyle(Qt.PenCapStyle.RoundCap)
+            stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            self._shape_cache = stroker.createStroke(self.path())
+        return self._shape_cache
 
     def _nearest_endpoint(self, scene_pos: QPointF) -> str | None:
         start = self._source.port_scene_position("output", self._source_port)
@@ -631,11 +647,35 @@ class CanvasEdgeItem(QGraphicsPathItem, QObject):
         if self._hovered and self._relation == "dimmed" and not self.isSelected():
             color = QColor("#94A3B8")
             width = 1.8
-        pen = QPen(color, width)
+        pen = QPen(color, 1.0 if self._compact else width)
+        pen.setCosmetic(self._compact)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        if self._flow_offset is not None and not self._compact:
+            pen.setStyle(Qt.PenStyle.CustomDashLine)
+            pen.setDashPattern([1.2, 7.0])
+            pen.setDashOffset(self._flow_offset)
         self.setPen(pen)
         self.update()
+
+    def set_flow_offset(self, offset: float | None) -> None:
+        """Advance the direction dash. ``None`` restores a solid stroke."""
+
+        if offset is None:
+            if self._flow_offset is None:
+                return
+            self._flow_offset = None
+            self._update_pen()
+            return
+        self._flow_offset = offset
+        if self._compact:
+            return
+        pen = self.pen()
+        if pen.style() != Qt.PenStyle.CustomDashLine:
+            self._update_pen()
+            return
+        pen.setDashOffset(offset)
+        self.setPen(pen)
 
     @property
     def edge_data(self) -> EdgeData:
@@ -670,14 +710,3 @@ def _distance(left: QPointF, right: QPointF) -> float:
     delta = left - right
     return (delta.x() ** 2 + delta.y() ** 2) ** 0.5
 
-
-def _run_state(item: CanvasNodeItem) -> str:
-    return str(item._node.metadata.get("run_state") or "")
-
-
-def _run_color(item: CanvasNodeItem) -> QColor | None:
-    return {
-        "running": QColor("#2563EB"),
-        "ok": QColor("#16A34A"),
-        "error": QColor("#DC2626"),
-    }.get(_run_state(item))

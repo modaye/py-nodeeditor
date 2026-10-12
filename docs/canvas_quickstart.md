@@ -16,7 +16,7 @@ uv run python -m py_editor
 - `NodeData`: Serializable description of a node (id, title, `node_type`, ports, metadata).
 - `EdgeData`: Serializable description of a connection (`edge_type`, endpoints, ports, metadata).
 - `CanvasState`: In-memory graph containing nodes, edges, and the current selection. Provides dictionary-style access plus helpers for cloning and serialization.
-- `CanvasController`: High-level façade. `connect` applies `CanvasPolicy` (snap radius, single input, cycle check) and records one undo step. `create_edge` writes an edge without those rules.
+- `CanvasController`: High-level façade. `connect` is the only way to add an edge. It applies `CanvasPolicy` and records one undo step.
 - `CanvasPolicy`: Connection rules shared by the controller and the view.
 - `CanvasRegistry`: Maps `node_type` / `edge_type` identifiers to factory functions that produce custom Qt graphics items.
 - `CanvasView`: Interactive Qt view that renders the state, listens to controller events, and exposes signals for UI integrations.
@@ -29,7 +29,7 @@ The snippet below wires together the state, controller, view, and registry to sh
 
 ```python
 from PySide6.QtWidgets import QApplication
-from py_editor import CanvasController, CanvasRegistry, CanvasView
+from py_editor import CanvasController, CanvasRegistry, CanvasView, Port
 
 app = QApplication([])
 registry = CanvasRegistry()
@@ -41,13 +41,13 @@ node_a = controller.create_node(
     "Input",
     position=(80.0, 120.0),
     node_type="demo",
-    outputs=["value"],
+    ports=[Port("value", "output")],
 )
 node_b = controller.create_node(
     "Output",
     position=(320.0, 120.0),
     node_type="demo",
-    inputs=["value"],
+    ports=[Port("value", "input")],
 )
 controller.connect(
     node_a.id,
@@ -61,7 +61,7 @@ view.show()
 app.exec()
 ```
 
-`connect` checks the input port, port kinds, and cycles, then records one undo step. `create_edge` writes an edge without those rules. `canvas_registry` is a shared registry when canvases do not need isolation.
+`connect` checks the input port, port kinds, and cycles, then records one undo step. Each view builds its own registry unless one is passed in. Documents use `schema_version` 1 and always include a viewport.
 
 ## Custom Rendering
 
@@ -118,7 +118,7 @@ The `CanvasState.from_dict` constructor validates that edges only reference know
 
 ## Undo/Redo and Clipboard
 
-All mutations executed through `CanvasController` are undoable. Drag empty canvas to pan. Shift-drag selects. The wheel zooms. Selecting a node draws its wires in blue and fades the others; Escape clears that emphasis. `CanvasView` binds Delete, Ctrl+Z, Ctrl+Y, Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+D, Ctrl+A, Ctrl+0, Ctrl+Plus, Ctrl+Minus, Ctrl+L, and Ctrl+Shift+L.
+All mutations executed through `CanvasController` are undoable. Drag empty canvas to pan. Shift-drag selects. The wheel zooms. Selecting a node draws its wires in blue and fades the others; Escape clears that emphasis. `CanvasView` binds Delete, Ctrl+Z, Ctrl+Y, Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+D, Ctrl+A, Ctrl+0, Ctrl+Plus, Ctrl+Minus, Ctrl+L, Ctrl+Shift+L, and Ctrl+F. `focus_titled` selects nodes whose title contains the query and frames them. When a node is under about 48 pixels wide, cards and wires draw as blocks and straight lines so a graph of tens of thousands of nodes can still pan. The background is a scene-space grid unless `set_grid_enabled(False)` is called. A minimap appears at the bottom right when the graph does not fit, and clicking it pans. Edge animation is off unless `set_edge_animation_enabled(True)` is called; it then dashes wires until more than 64 are visible, or the view is in compact mode.
 
 ```python
 controller.connect(node_a.id, node_b.id)
@@ -150,6 +150,7 @@ uv run pytest
 
 ## Further Reading
 
+- [Public API](api.md) lists the data types, controller methods, and what stays stable before 1.0.
 - `python -m py_editor` opens a small canvas for trying pan, zoom, and connecting.
 
 With these building blocks you can embed the canvas into your own PySide6 applications and ship it as an independent, scriptable graph editor.

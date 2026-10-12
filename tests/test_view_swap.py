@@ -10,7 +10,7 @@ from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QApplication
 
 from py_editor import CanvasController, CanvasView
-from py_editor.models import CanvasState, EdgeData, NodeData
+from py_editor.models import CanvasState, EdgeData, NodeData, Port
 
 
 @pytest.fixture(scope="module")
@@ -38,10 +38,10 @@ def test_swapping_controllers_redraws_wires_on_the_new_nodes(qapp: QApplication)
 def test_selecting_a_node_highlights_only_its_wires(qapp: QApplication) -> None:
     view = CanvasView()
     state = CanvasState()
-    state.nodes["a"] = NodeData("a", "A", position=(0.0, 0.0), outputs=["out"])
-    state.nodes["b"] = NodeData("b", "B", position=(240.0, 0.0), inputs=["in"])
-    state.nodes["c"] = NodeData("c", "C", position=(0.0, 180.0), outputs=["out"])
-    state.nodes["d"] = NodeData("d", "D", position=(240.0, 180.0), inputs=["in"])
+    state.nodes["a"] = NodeData("a", "A", position=(0.0, 0.0), ports=[Port("out", "output")])
+    state.nodes["b"] = NodeData("b", "B", position=(240.0, 0.0), ports=[Port("in", "input")])
+    state.nodes["c"] = NodeData("c", "C", position=(0.0, 180.0), ports=[Port("out", "output")])
+    state.nodes["d"] = NodeData("d", "D", position=(240.0, 180.0), ports=[Port("in", "input")])
     state.edges["ab"] = EdgeData("ab", "a", "b", source_port="out", target_port="in")
     state.edges["cd"] = EdgeData("cd", "c", "d", source_port="out", target_port="in")
     view.set_controller(CanvasController(state))
@@ -77,13 +77,13 @@ def _graph(source: str, target: str, x: float, y: float) -> CanvasState:
         id=source,
         title=source,
         position=(x, y),
-        outputs=["out"],
+        ports=[Port("out", "output")],
     )
     state.nodes[target] = NodeData(
         id=target,
         title=target,
         position=(x + 280.0, y),
-        inputs=["in"],
+        ports=[Port("in", "input")],
     )
     state.edges["edge-0"] = EdgeData(
         id="edge-0",

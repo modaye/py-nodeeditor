@@ -1,15 +1,12 @@
 from .controller import CanvasController
 from .graphics import CanvasEdgeItem, CanvasNodeItem
-from .models import CanvasState, EdgeData, NodeData
+from .models import SCHEMA_VERSION, CanvasState, EdgeData, NodeData, Port, Viewport
 from .policy import CanvasPolicy, ConnectResult
-from .registry import (
-    CanvasRegistry,
-    ConnectionPreviewStyleOptions,
-    canvas_registry,
-)
-from .view import TOOL_DROP_MIME, CanvasView
+from .registry import CanvasRegistry, ConnectionPreviewStyleOptions
+from .view import CanvasView
 
 __all__ = [
+    "SCHEMA_VERSION",
     "CanvasController",
     "CanvasEdgeItem",
     "CanvasNodeItem",
@@ -21,6 +18,6 @@ __all__ = [
     "ConnectionPreviewStyleOptions",
     "EdgeData",
     "NodeData",
-    "TOOL_DROP_MIME",
-    "canvas_registry",
+    "Port",
+    "Viewport",
 ]

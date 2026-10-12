@@ -7,6 +7,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from .controller import CanvasController
+from .models import Port
 from .view import CanvasView
 
 
@@ -18,24 +19,22 @@ def main() -> None:
     source = controller.create_node(
         "Source",
         position=(80.0, 180.0),
-        outputs=["out"],
+        ports=[Port("out", "output")],
     )
     filt = controller.create_node(
         "Filter",
         position=(360.0, 80.0),
-        inputs=["in"],
-        outputs=["out"],
+        ports=[Port("in", "input"), Port("out", "output")],
     )
     join = controller.create_node(
         "Join",
         position=(360.0, 280.0),
-        inputs=["left", "right"],
-        outputs=["out"],
+        ports=[Port("left", "input"), Port("right", "input"), Port("out", "output")],
     )
     sink = controller.create_node(
         "Output",
         position=(680.0, 180.0),
-        inputs=["in"],
+        ports=[Port("in", "input")],
     )
     controller.connect(source.id, filt.id)
     controller.connect(source.id, join.id, target_port="left")

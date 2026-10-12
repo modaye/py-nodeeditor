@@ -12,6 +12,7 @@ from py_editor import (
     ConnectionPreviewStyleOptions,
 )
 from py_editor.graphics import CanvasEdgeItem, CanvasNodeItem
+from py_editor.models import Port
 from py_editor.registry import CanvasRegistry
 
 
@@ -52,20 +53,22 @@ def test_registry_resolves_custom_factories(qapp):
     source = controller.create_node(
         "Source",
         node_type="special",
-        outputs=["out"],
+        ports=[Port("out", "output")],
     )
     target = controller.create_node(
         "Target",
         node_type="special",
-        inputs=["inp"],
+        ports=[Port("inp", "input")],
     )
-    edge = controller.create_edge(
-        source=source.id,
-        target=target.id,
+    result = controller.connect(
+        source.id,
+        target.id,
         source_port="out",
         target_port="inp",
         edge_type="fancy",
     )
+    assert result.edge_id is not None
+    edge_id = result.edge_id
 
     view = CanvasView(registry=registry)
     view.set_controller(controller)
@@ -73,30 +76,22 @@ def test_registry_resolves_custom_factories(qapp):
     assert isinstance(view.registry, CanvasRegistry)
     assert isinstance(view._node_items[source.id], CustomNodeItem)
     assert isinstance(view._node_items[target.id], CustomNodeItem)
-    assert isinstance(view._edge_items[edge.id], CustomEdgeItem)
+    assert isinstance(view._edge_items[edge_id], CustomEdgeItem)
 
 
-def test_registry_legacy_metadata_kind(qapp):
+def test_metadata_is_not_a_node_type(qapp):
     registry = CanvasRegistry()
     registry.register_node_factory("legacy", _node_factory)
-    registry.register_edge_factory("legacy-edge", _edge_factory)
 
     controller = CanvasController()
     node = controller.create_node(
         "Legacy",
         metadata={"canvas": {"kind": "legacy"}},
     )
-    legacy_edge = controller.create_edge(
-        source=node.id,
-        target=node.id,
-        metadata={"canvas": {"kind": "legacy-edge"}},
-    )
-
     view = CanvasView(registry=registry)
     view.set_controller(controller)
 
-    assert isinstance(view._node_items[node.id], CustomNodeItem)
-    assert isinstance(view._edge_items[legacy_edge.id], CustomEdgeItem)
+    assert not isinstance(view._node_items[node.id], CustomNodeItem)
 
 
 def test_duplicate_registration_requires_replace():
